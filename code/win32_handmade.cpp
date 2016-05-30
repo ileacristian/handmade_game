@@ -52,6 +52,8 @@ struct win32_sound_buffer_info
 	uint32 RunningSampleIndex;
 	int WavePeriod;
 	int BufferSize;
+	real32 tSine;
+	int LatencySampleCount;
 	LPDIRECTSOUNDBUFFER DirectSoundBuffer;
 };
 
@@ -396,6 +398,10 @@ Win32HandleXInput()
 			GlobalXOffset += LeftThumbX / 4000;
 			GlobalYOffset += -LeftThumbY / 4000;
 
+			GlobalSoundBuffer.ToneHz = 512 + (int)(256.0f*((real32)LeftThumbY / 30000.0f));
+			GlobalSoundBuffer.ToneHz = GlobalSoundBuffer.ToneHz == 0 ? 10 : GlobalSoundBuffer.ToneHz;
+			GlobalSoundBuffer.WavePeriod = GlobalSoundBuffer.SamplesPerSecond / GlobalSoundBuffer.ToneHz;
+
 			int16 RightThumbX = GamePad->sThumbRX;
 			int16 RightThumbY = GamePad->sThumbRY;
 			printf("Right X:%d Y:%d", RightThumbX, RightThumbY);
@@ -480,6 +486,8 @@ Win32HandleXInput()
 
 internal void
 Win32InitDSound(HWND Window, win32_sound_buffer_info *SoundBuffer);
+internal void
+FillSoundBufferWithSineWave(win32_sound_buffer_info *SoundBuffer, DWORD ByteToLock, DWORD BytesToWrite);
 
 internal void
 Win32SetupSound(HWND WindowHandle)
@@ -488,13 +496,16 @@ Win32SetupSound(HWND WindowHandle)
 
 	GlobalSoundBuffer.SamplesPerSecond = 48000;
 	GlobalSoundBuffer.BytesPerSample = sizeof(int16) * 2;
-	GlobalSoundBuffer.ToneHz = 266;
+	GlobalSoundBuffer.ToneHz = 512;
 	GlobalSoundBuffer.ToneVolume = 5000;
 	GlobalSoundBuffer.RunningSampleIndex = 0;
 	GlobalSoundBuffer.WavePeriod = GlobalSoundBuffer.SamplesPerSecond / GlobalSoundBuffer.ToneHz;
 	GlobalSoundBuffer.BufferSize = GlobalSoundBuffer.SamplesPerSecond * GlobalSoundBuffer.BytesPerSample;
+	GlobalSoundBuffer.LatencySampleCount = GlobalSoundBuffer.SamplesPerSecond / 20.0;
 
 	Win32InitDSound(WindowHandle, &GlobalSoundBuffer);
+
+	FillSoundBufferWithSineWave(&GlobalSoundBuffer, 0, GlobalSoundBuffer.LatencySampleCount*GlobalSoundBuffer.BytesPerSample);
 
 	GlobalSoundBuffer.DirectSoundBuffer->Play(0, 0, DSBPLAY_LOOPING);
 	GlobalSoundBuffer.SoundIsPlaying = true;
@@ -580,66 +591,69 @@ PlaySineIntoGlobalSoundBuffer()
 	DWORD WriteCursor;
 	if (SUCCEEDED(GlobalSoundBuffer.DirectSoundBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor)))
 	{
-		DWORD ByteToLock = GlobalSoundBuffer.RunningSampleIndex * GlobalSoundBuffer.BytesPerSample % GlobalSoundBuffer.BufferSize;
+		DWORD ByteToLock = ((GlobalSoundBuffer.RunningSampleIndex*GlobalSoundBuffer.BytesPerSample) %
+			GlobalSoundBuffer.BufferSize);
+
+
+		DWORD TargetCursor =
+			((PlayCursor +
+			(GlobalSoundBuffer.LatencySampleCount*GlobalSoundBuffer.BytesPerSample)) %
+				GlobalSoundBuffer.BufferSize);
 		DWORD BytesToWrite;
-		if (ByteToLock == PlayCursor)
-		{
-			if (GlobalSoundBuffer.SoundIsPlaying)
-			{
-				BytesToWrite = 0;
-			}
-			else
-			{
-				BytesToWrite = GlobalSoundBuffer.BufferSize;
-			}
-		}
-		else if (ByteToLock > PlayCursor)
+		if (ByteToLock > TargetCursor)
 		{
 			BytesToWrite = (GlobalSoundBuffer.BufferSize - ByteToLock);
-			BytesToWrite += PlayCursor;
+			BytesToWrite += TargetCursor;
 		}
-		else
+		else 
 		{
-			BytesToWrite = PlayCursor - ByteToLock;
+			BytesToWrite = TargetCursor - ByteToLock;
 		}
 
-		VOID *Region1;
-		DWORD Region1Size;
-		VOID *Region2;
-		DWORD Region2Size;
+		FillSoundBufferWithSineWave(&GlobalSoundBuffer, ByteToLock, BytesToWrite);
+	}
+}
 
-		if (SUCCEEDED(GlobalSoundBuffer.DirectSoundBuffer->Lock(ByteToLock, BytesToWrite, &Region1, &Region1Size, &Region2, &Region2Size, 0)))
+internal void
+FillSoundBufferWithSineWave(win32_sound_buffer_info *SoundBuffer, DWORD ByteToLock, DWORD BytesToWrite)
+{
+	VOID *Region1;
+	DWORD Region1Size;
+	VOID *Region2;
+	DWORD Region2Size;
+
+	if (SUCCEEDED(SoundBuffer->DirectSoundBuffer->Lock(ByteToLock, BytesToWrite, &Region1, &Region1Size, &Region2, &Region2Size, 0)))
+	{
+		int16 *SampleOut = (int16 *)Region1;
+		DWORD Region1SampleCount = Region1Size / SoundBuffer->BytesPerSample;
+		for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; SampleIndex++)
 		{
-			int16 *SampleOut = (int16 *)Region1;
-			DWORD Region1SampleCount = Region1Size / GlobalSoundBuffer.BytesPerSample;
-			for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; SampleIndex++)
-			{
-				real32 t = 2 * (real32)Pi32 *(real32)GlobalSoundBuffer.RunningSampleIndex / (real32)GlobalSoundBuffer.WavePeriod;
-				real32 SineValue = sinf(t);
-				int16 SampleValue = (int16)(SineValue * GlobalSoundBuffer.ToneVolume);
-				*SampleOut++ = SampleValue;
-				*SampleOut++ = SampleValue;;
-				GlobalSoundBuffer.RunningSampleIndex++;
-			}
-
-			SampleOut = (int16 *)Region2;
-			DWORD Region2SampleCount = Region2Size / GlobalSoundBuffer.BytesPerSample;
-			for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; SampleIndex++)
-			{
-				real32 t = 2 * (real32)Pi32 *(real32)GlobalSoundBuffer.RunningSampleIndex / (real32)GlobalSoundBuffer.WavePeriod;
-				real32 SineValue = sinf(t);
-				int16 SampleValue = (int16)(SineValue * GlobalSoundBuffer.ToneVolume);
-				*SampleOut++ = SampleValue;
-				*SampleOut++ = SampleValue;;
-				GlobalSoundBuffer.RunningSampleIndex++;
-			}
+			real32 SineValue = sinf(SoundBuffer->tSine);
+			int16 SampleValue = (int16)(SineValue * SoundBuffer->ToneVolume);
+			*SampleOut++ = SampleValue;
+			*SampleOut++ = SampleValue;
+			SoundBuffer->tSine += 2 * (real32)Pi32 * 1.0 / (real32)SoundBuffer->WavePeriod;
+			SoundBuffer->RunningSampleIndex++;
 		}
 
-
-		GlobalSoundBuffer.DirectSoundBuffer->Unlock(Region1, Region1Size, Region2, Region2Size);
+		SampleOut = (int16 *)Region2;
+		DWORD Region2SampleCount = Region2Size / SoundBuffer->BytesPerSample;
+		for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; SampleIndex++)
+		{
+			real32 t = 2 * (real32)Pi32 *(real32)SoundBuffer->RunningSampleIndex / (real32)SoundBuffer->WavePeriod;
+			real32 SineValue = sinf(SoundBuffer->tSine);
+			int16 SampleValue = (int16)(SineValue * SoundBuffer->ToneVolume);
+			*SampleOut++ = SampleValue;
+			*SampleOut++ = SampleValue;
+			SoundBuffer->tSine += 2 * (real32)Pi32 * 1.0 / (real32)SoundBuffer->WavePeriod;
+			SoundBuffer->RunningSampleIndex++;
+		}
 	}
 
+
+	GlobalSoundBuffer.DirectSoundBuffer->Unlock(Region1, Region1Size, Region2, Region2Size);
 }
+
 
 int CALLBACK
 WinMain(HINSTANCE Instance,
