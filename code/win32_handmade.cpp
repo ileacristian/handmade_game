@@ -288,8 +288,8 @@ Win32MainWindowCallback(
 				GlobalRunning = false;
 			} 
 
-            if (WasDown != IsDown)
-            {
+            //if (WasDown != IsDown)
+            //{
                 if (VKCode == 'W')
                 {
                 }
@@ -316,28 +316,23 @@ Win32MainWindowCallback(
 
                 if (VKCode == VK_UP)
                 {
-                    OutputDebugString("Up :");
-                    if (WasDown)
-                    {
-                        OutputDebugString("Lift");
-                    }
-                    if (IsDown)
-                    {
-                        OutputDebugString("Press");
-                    }
-                    OutputDebugString("\n");
+					GlobalYOffset -= 30;
                 }
 
                 if (VKCode == VK_DOWN)
                 {
+					GlobalYOffset += 30;
                 }
 
                 if (VKCode == VK_LEFT)
                 {
+					GlobalXOffset -= 30;
+
                 }
 
                 if (VKCode == VK_RIGHT)
                 {
+					GlobalXOffset += 30;
                 }
 
                 if (VKCode == VK_ESCAPE)
@@ -347,7 +342,7 @@ Win32MainWindowCallback(
                 if (VKCode == VK_SPACE)
                 {
                 }
-            }
+            //}
 
         } break;
         
@@ -661,6 +656,9 @@ WinMain(HINSTANCE Instance,
     LPSTR CommandLine,
     int ShowCode)
 {
+	LARGE_INTEGER PerfCountFrequencyResult;
+	QueryPerformanceFrequency(&PerfCountFrequencyResult);
+	int64 PerfCountFrequency = PerfCountFrequencyResult.QuadPart;
 
     WNDCLASS WindowClass = {};
     WindowClass.style = CS_HREDRAW|CS_VREDRAW;
@@ -689,6 +687,12 @@ WinMain(HINSTANCE Instance,
 	Win32SetupSound(WindowHandle);
 
     GlobalRunning = true;
+
+	uint64 LastCycleCount = __rdtsc();
+
+	LARGE_INTEGER LastCounter;
+	QueryPerformanceCounter(&LastCounter);
+
     while(GlobalRunning)
 	{   
 		Win32HandleMessages();
@@ -700,6 +704,24 @@ WinMain(HINSTANCE Instance,
 		Win32DisplayBufferInWindow(WindowHandle, &GlobalBackbuffer);
 
 		PlaySineIntoGlobalSoundBuffer();
+
+		uint64 EndCycleCount = __rdtsc();
+
+		LARGE_INTEGER EndCounter;
+		QueryPerformanceCounter(&EndCounter);
+
+		real32 CounterElapsed = real32(EndCounter.QuadPart - LastCounter.QuadPart);
+		uint64 CyclesElapsed = EndCycleCount - LastCycleCount;
+
+		real64 MSPerFrame = (((1000.0f*(real64)CounterElapsed) / (real64)PerfCountFrequency));
+		real64 FPS = (real64)PerfCountFrequency / (real64)CounterElapsed;
+		real64 MCPF = ((real64)CyclesElapsed / (1000.0f * 1000.0f));
+
+		char Buffer[256];
+		sprintf(Buffer, "%.02fms/f,  %.02ff/s,  %.02fmc/f\n", MSPerFrame, FPS, MCPF);
+		OutputDebugStringA(Buffer);
+
+		LastCounter = EndCounter;
 	}
 
     return 0;
